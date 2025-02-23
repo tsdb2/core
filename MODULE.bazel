@@ -1,0 +1,45 @@
+"""Core components of TSDB2."""
+
+module(
+    name = "tsdb2",
+    version = "0.0.1",
+    repo_name = "com_tsdb2_core",
+)
+
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+bazel_dep(
+    name = "googletest",
+    version = "1.15.2",
+    repo_name = "com_google_googletest",
+)
+
+bazel_dep(
+    name = "google_benchmark",
+    version = "1.8.5",
+    repo_name = "com_google_benchmark",
+)
+
+bazel_dep(
+    name = "abseil-cpp",
+    version = "20240722.0.bcr.2",
+    repo_name = "com_google_absl",
+)
+
+bazel_dep(
+    name = "protobuf",
+    version = "28.3",
+    repo_name = "com_google_protobuf",
+)
+
+bazel_dep(
+    name = "rules_cc",
+    version = "0.1.1",
+)
+
+http_archive(
+    name = "com_tsdb2_platform",
+    url = "https://github.com/tsdb2/platform/archive/refs/tags/v0.0.9.tar.gz",
+    sha256 = "382a62374e65dc714a19ea7c0f32430edeafcd5f8eb07c0c38ece2f2c9cb8b86",
+    strip_prefix = "platform-0.0.9",
+)

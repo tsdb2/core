@@ -1,0 +1,18 @@
+{
+  "configurations": [
+    {
+      "name": "Linux",
+      "includePath": [
+        "${workspaceFolder}",
+        "${workspaceFolder}/bazel-platform/external/abseil-cpp+",
+        "${workspaceFolder}/bazel-platform/external/googletest+/googlemock/include",
+        "${workspaceFolder}/bazel-platform/external/googletest+/googletest/include"
+      ],
+      "defines": [],
+      "compilerPath": "/usr/bin/clang++-18",
+      "cStandard": "c17",
+      "cppStandard": "c++17"
+    }
+  ],
+  "version": 4
+}
