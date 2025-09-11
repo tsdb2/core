@@ -6,6 +6,7 @@ use clap::Parser;
 use std::sync::Arc;
 use tonic::transport::Server;
 
+mod bucketer;
 mod clock;
 mod config;
 mod server;
