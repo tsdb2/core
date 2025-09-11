@@ -9,6 +9,10 @@ use tonic::transport::Server;
 mod bucketer;
 mod clock;
 mod config;
+mod counter;
+mod exporter;
+mod f64;
+mod fields;
 mod server;
 
 pub mod tsz {

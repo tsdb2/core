@@ -1,10 +1,11 @@
+use std::fmt::Debug;
 use std::time::SystemTime;
 
-pub trait Clock: Send + Sync {
+pub trait Clock: Debug + Send + Sync {
     fn now(&self) -> SystemTime;
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct RealClock {}
 
 impl Clock for RealClock {
@@ -19,6 +20,7 @@ pub mod test {
     use std::sync::Mutex;
     use std::time::Duration;
 
+    #[derive(Debug)]
     pub struct MockClock {
         time: Mutex<SystemTime>,
     }

@@ -1,27 +1,5 @@
+use crate::f64::F64;
 use crate::tsz;
-
-/// A fully comparable 64-bit floating point type for use in `Bucketer`.
-#[derive(Debug, Default, Copy, Clone, PartialEq, PartialOrd)]
-struct F64 {
-    value: f64,
-}
-
-impl Eq for F64 {}
-
-impl Ord for F64 {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.value
-            .partial_cmp(&other.value)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    }
-}
-
-impl From<f64> for F64 {
-    fn from(value: f64) -> Self {
-        assert!(value.is_finite());
-        Self { value }
-    }
-}
 
 /// Determines the number and boundaries of the buckets of a `Distribution`.
 ///
