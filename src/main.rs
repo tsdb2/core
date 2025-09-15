@@ -10,6 +10,8 @@ mod bucketer;
 mod clock;
 mod config;
 mod counter;
+mod distribution;
+mod event_metric;
 mod exporter;
 mod f64;
 mod fields;
