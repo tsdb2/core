@@ -1,6 +1,5 @@
 use crate::config::ConfigServiceImpl;
-use crate::tsdb2;
-use crate::tsz;
+use crate::proto;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
@@ -18,33 +17,32 @@ impl TimeSeriesService {
 }
 
 #[tonic::async_trait]
-#[tonic::async_trait]
-impl tsdb2::tsz_collection_server::TszCollection for TimeSeriesService {
+impl proto::tsdb2::tsz_collection_server::TszCollection for TimeSeriesService {
     async fn define_metrics(
         &self,
-        _request: Request<tsz::DefineMetricsRequest>,
-    ) -> Result<Response<tsz::DefineMetricsResponse>, Status> {
+        _request: Request<proto::tsz::DefineMetricsRequest>,
+    ) -> Result<Response<proto::tsz::DefineMetricsResponse>, Status> {
         todo!()
     }
 
     async fn write_entity(
         &self,
-        _request: Request<tsdb2::WriteEntityRequest>,
-    ) -> Result<Response<tsdb2::WriteEntityResponse>, Status> {
+        _request: Request<proto::tsdb2::WriteEntityRequest>,
+    ) -> Result<Response<proto::tsdb2::WriteEntityResponse>, Status> {
         todo!()
     }
 
     async fn read_schedules(
         &self,
-        _request: Request<tsdb2::ReadSchedulesRequest>,
-    ) -> Result<Response<tsdb2::ReadSchedulesResponse>, Status> {
+        _request: Request<proto::tsdb2::ReadSchedulesRequest>,
+    ) -> Result<Response<proto::tsdb2::ReadSchedulesResponse>, Status> {
         todo!()
     }
 
     async fn write_target(
         &self,
-        _request: Request<tsdb2::WriteTargetRequest>,
-    ) -> Result<Response<tsdb2::WriteTargetResponse>, Status> {
+        _request: Request<proto::tsdb2::WriteTargetRequest>,
+    ) -> Result<Response<proto::tsdb2::WriteTargetResponse>, Status> {
         todo!()
     }
 }

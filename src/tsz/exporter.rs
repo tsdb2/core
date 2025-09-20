@@ -1,9 +1,5 @@
-use crate::bucketer::{Bucketer, BucketerRef};
-use crate::clock::Clock;
-use crate::clock::RealClock;
-use crate::distribution::Distribution;
-use crate::f64::F64;
-use crate::fields::FieldMap;
+use crate::tsz::{FieldMap, bucketer::Bucketer, config::MetricConfig, distribution::Distribution};
+use crate::utils::{clock::Clock, clock::RealClock, f64::F64};
 use anyhow::{Result, anyhow};
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -15,47 +11,6 @@ use std::sync::Mutex as SyncMutex;
 use std::sync::{Arc, LazyLock, atomic::AtomicUsize, atomic::Ordering};
 use std::time::SystemTime;
 use tokio::sync::Mutex;
-
-#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
-pub struct MetricConfig {
-    pub cumulative: bool,
-    pub skip_stable_cells: bool,
-    pub delta_mode: bool,
-    pub user_timestamps: bool,
-    pub bucketer: Option<BucketerRef>,
-}
-
-impl MetricConfig {
-    pub fn set_cumulative(mut self, value: bool) -> Self {
-        self.cumulative = value;
-        self
-    }
-
-    pub fn set_skip_stable_cells(mut self, value: bool) -> Self {
-        self.skip_stable_cells = value;
-        self
-    }
-
-    pub fn set_delta_mode(mut self, value: bool) -> Self {
-        self.delta_mode = value;
-        self
-    }
-
-    pub fn set_user_timestamps(mut self, value: bool) -> Self {
-        self.user_timestamps = value;
-        self
-    }
-
-    pub fn set_bucketer(mut self, bucketer: &'static Bucketer) -> Self {
-        self.bucketer = Some(bucketer.into());
-        self
-    }
-
-    pub fn clear_bucketer(mut self) -> Self {
-        self.bucketer = None;
-        self
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
@@ -191,6 +146,27 @@ impl<'a> Metric<'a> {
         };
     }
 
+    fn add_int_deltas(&mut self, deltas: BTreeMap<FieldMap, i64>, now: SystemTime) {
+        for (metric_fields, delta) in deltas {
+            if let Some(cell) = self.cells.get_mut(&metric_fields) {
+                match &mut cell.value {
+                    Value::Int(value) => *value += delta,
+                    _ => panic!(),
+                };
+                cell.update_timestamp = now;
+            } else {
+                self.cells.insert(
+                    metric_fields,
+                    Cell {
+                        value: Value::Int(delta),
+                        start_timestamp: now,
+                        update_timestamp: now,
+                    },
+                );
+            };
+        }
+    }
+
     fn add_to_distribution(
         &mut self,
         sample: f64,
@@ -220,6 +196,31 @@ impl<'a> Metric<'a> {
                 },
             );
         };
+    }
+
+    fn add_distribution_deltas(
+        &mut self,
+        deltas: BTreeMap<FieldMap, Distribution>,
+        now: SystemTime,
+    ) {
+        for (metric_fields, delta) in deltas {
+            if let Some(cell) = self.cells.get_mut(&metric_fields) {
+                match &mut cell.value {
+                    Value::Dist(value) => value.add(&delta).unwrap(),
+                    _ => panic!(),
+                };
+                cell.update_timestamp = now;
+            } else {
+                self.cells.insert(
+                    metric_fields,
+                    Cell {
+                        value: Value::Dist(delta),
+                        start_timestamp: now,
+                        update_timestamp: now,
+                    },
+                );
+            }
+        }
     }
 
     fn delete_value(&mut self, metric_fields: &FieldMap) -> Option<Value> {
@@ -390,6 +391,25 @@ impl<'a> Entity<'a> {
         metrics.insert(metric);
     }
 
+    async fn add_int_deltas(
+        &self,
+        metric_name: &str,
+        deltas: BTreeMap<FieldMap, i64>,
+        now: SystemTime,
+    ) {
+        let mut metrics = self.metrics.lock().await;
+        let mut metric = if let Some(metric) = metrics.take(metric_name) {
+            metric
+        } else {
+            Metric::new(
+                metric_name.into(),
+                self.parent.get_metric_config_internal(metric_name),
+            )
+        };
+        metric.add_int_deltas(deltas, now);
+        metrics.insert(metric);
+    }
+
     async fn add_to_distribution(
         &self,
         metric_name: &str,
@@ -408,6 +428,25 @@ impl<'a> Entity<'a> {
             )
         };
         metric.add_to_distribution(sample, times, metric_fields, now);
+        metrics.insert(metric);
+    }
+
+    async fn add_distribution_deltas(
+        &self,
+        metric_name: &str,
+        deltas: BTreeMap<FieldMap, Distribution>,
+        now: SystemTime,
+    ) {
+        let mut metrics = self.metrics.lock().await;
+        let mut metric = if let Some(metric) = metrics.take(metric_name) {
+            metric
+        } else {
+            Metric::new(
+                metric_name.into(),
+                self.parent.get_metric_config_internal(metric_name),
+            )
+        };
+        metric.add_distribution_deltas(deltas, now);
         metrics.insert(metric);
     }
 
@@ -723,6 +762,19 @@ impl<'a> Exporter<'a> {
             .await;
     }
 
+    pub async fn add_int_deltas(
+        self: Pin<&'a Self>,
+        entity_labels: &FieldMap,
+        metric_name: &str,
+        deltas: BTreeMap<FieldMap, i64>,
+    ) {
+        let now = self.clock.now();
+        self.get_pinned_entity(entity_labels)
+            .await
+            .add_int_deltas(metric_name, deltas, now)
+            .await;
+    }
+
     pub async fn add_to_distribution(
         self: Pin<&'a Self>,
         entity_labels: &FieldMap,
@@ -749,6 +801,19 @@ impl<'a> Exporter<'a> {
         self.get_pinned_entity(entity_labels)
             .await
             .add_to_distribution(metric_name, sample, times, metric_fields, now)
+            .await;
+    }
+
+    pub async fn add_distribution_deltas(
+        self: Pin<&'a Self>,
+        entity_labels: &FieldMap,
+        metric_name: &str,
+        deltas: BTreeMap<FieldMap, Distribution>,
+    ) {
+        let now = self.clock.now();
+        self.get_pinned_entity(entity_labels)
+            .await
+            .add_distribution_deltas(metric_name, deltas, now)
             .await;
     }
 
@@ -838,8 +903,8 @@ pub static EXPORTER: LazyLock<Pin<&Exporter>> = LazyLock::new(|| EXPORTER_INSTAN
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::clock::test::MockClock;
-    use crate::fields::FieldValue;
+    use crate::tsz::FieldValue;
+    use crate::utils::clock::test::MockClock;
 
     #[test]
     fn test_empty_metric() {

@@ -1,5 +1,5 @@
-use crate::f64::F64;
-use crate::tsz;
+use crate::proto;
+use crate::utils::f64::F64;
 use anyhow::{Result, anyhow};
 use std::borrow::Borrow;
 use std::collections::BTreeSet;
@@ -149,9 +149,9 @@ impl Bucketer {
         i - 1
     }
 
-    /// Serializes the bucketer into a `tsz::Bucketer` proto.
-    pub fn encode(&self) -> tsz::Bucketer {
-        tsz::Bucketer {
+    /// Serializes the bucketer into a `proto::tsz::Bucketer` proto.
+    pub fn encode(&self) -> proto::tsz::Bucketer {
+        proto::tsz::Bucketer {
             width: Some(self.width()),
             growth_factor: Some(self.growth_factor()),
             scale_factor: Some(self.scale_factor()),
@@ -159,8 +159,8 @@ impl Bucketer {
         }
     }
 
-    /// Deserializes a `tsz::Bucketer` proto.
-    pub fn decode(proto: &tsz::Bucketer) -> Result<&'static Self> {
+    /// Deserializes a `proto::tsz::Bucketer` proto.
+    pub fn decode(proto: &proto::tsz::Bucketer) -> Result<&'static Self> {
         let width = match proto.width {
             Some(width) => Ok(width),
             _ => Err(anyhow!("missing width field from bucketer")),

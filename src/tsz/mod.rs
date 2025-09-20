@@ -1,5 +1,14 @@
 use std::ops::Index;
 
+mod exporter;
+
+pub mod bucketer;
+pub mod buffered;
+pub mod config;
+pub mod counter;
+pub mod distribution;
+pub mod event_metric;
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum FieldValue {
     Bool(bool),
@@ -53,6 +62,38 @@ impl Index<&str> for FieldMap {
             }
         }
         panic!()
+    }
+}
+
+pub async fn init() {
+    crate::tsz::buffered::init().await;
+}
+
+#[cfg(test)]
+pub mod testing {
+    use crate::tsz::{FieldMap, FieldValue};
+    use std::sync::{LazyLock, atomic::AtomicI64, atomic::Ordering};
+
+    pub fn test_entity_labels() -> FieldMap {
+        static IOTA: LazyLock<AtomicI64> = LazyLock::new(|| AtomicI64::from(42));
+        FieldMap::from([
+            ("sator", FieldValue::Str("arepo".into())),
+            (
+                "lorem",
+                FieldValue::Int(IOTA.fetch_add(1, Ordering::Relaxed)),
+            ),
+        ])
+    }
+
+    pub fn test_metric_fields() -> FieldMap {
+        static IOTA: LazyLock<AtomicI64> = LazyLock::new(|| AtomicI64::from(42));
+        FieldMap::from([
+            ("tenet", FieldValue::Bool(true)),
+            (
+                "opera",
+                FieldValue::Int(IOTA.fetch_add(1, Ordering::Relaxed)),
+            ),
+        ])
     }
 }
 

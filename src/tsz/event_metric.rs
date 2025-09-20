@@ -1,57 +1,52 @@
-use crate::bucketer::Bucketer;
-use crate::distribution::Distribution;
-use crate::exporter::{EXPORTER, MetricConfig};
-use crate::fields::FieldMap;
-use std::sync::OnceLock;
+use crate::tsz::{
+    FieldMap, bucketer::BucketerRef, config::MetricConfig, distribution::Distribution,
+    exporter::EXPORTER,
+};
+use crate::utils::lazy::Lazy;
 
 #[derive(Debug)]
-struct EventMetricImpl {}
+struct EventMetricImpl {
+    name: &'static str,
+}
 
 impl EventMetricImpl {
     fn new(name: &'static str, config: MetricConfig) -> Self {
         EXPORTER.define_metric_redundant(name, config);
-        Self {}
+        Self { name }
     }
 
     async fn get(
         &self,
         entity_labels: &FieldMap,
-        metric_name: &str,
         metric_fields: &FieldMap,
     ) -> Option<Distribution> {
         EXPORTER
-            .get_distribution(entity_labels, metric_name, metric_fields)
+            .get_distribution(entity_labels, self.name, metric_fields)
             .await
     }
 
     async fn record(
         &self,
         entity_labels: &FieldMap,
-        metric_name: &str,
         sample: f64,
         times: usize,
         metric_fields: &FieldMap,
     ) {
         EXPORTER
-            .add_many_to_distribution(entity_labels, metric_name, sample, times, metric_fields)
+            .add_many_to_distribution(entity_labels, self.name, sample, times, metric_fields)
             .await
     }
 
-    async fn delete(
-        &self,
-        entity_labels: &FieldMap,
-        metric_name: &str,
-        metric_fields: &FieldMap,
-    ) -> bool {
+    async fn delete(&self, entity_labels: &FieldMap, metric_fields: &FieldMap) -> bool {
         EXPORTER
-            .delete_value(entity_labels, metric_name, metric_fields)
+            .delete_value(entity_labels, self.name, metric_fields)
             .await
             .is_some()
     }
 
-    async fn delete_entity(&self, entity_labels: &FieldMap, metric_name: &str) -> bool {
+    async fn delete_entity(&self, entity_labels: &FieldMap) -> bool {
         EXPORTER
-            .delete_metric_from_entity(entity_labels, metric_name)
+            .delete_metric_from_entity(entity_labels, self.name)
             .await
     }
 }
@@ -60,22 +55,20 @@ impl EventMetricImpl {
 pub struct EventMetric {
     name: &'static str,
     config: MetricConfig,
-    inner: OnceLock<EventMetricImpl>,
+    inner: Lazy<EventMetricImpl>,
 }
 
 impl EventMetric {
     pub fn new(name: &'static str, mut config: MetricConfig) -> Self {
         config.cumulative = true;
+        if config.bucketer.is_none() {
+            config.bucketer = Some(BucketerRef::default());
+        }
         Self {
             name,
             config,
-            inner: OnceLock::default(),
+            inner: Lazy::new(move || EventMetricImpl::new(name, config)),
         }
-    }
-
-    fn inner(&self) -> &EventMetricImpl {
-        self.inner
-            .get_or_init(|| EventMetricImpl::new(self.name, self.config))
     }
 
     pub fn name(&self) -> &'static str {
@@ -86,14 +79,16 @@ impl EventMetric {
         &self.config
     }
 
+    pub fn bucketer(&self) -> BucketerRef {
+        self.config.bucketer.unwrap()
+    }
+
     pub async fn get(
         &self,
         entity_labels: &FieldMap,
         metric_fields: &FieldMap,
     ) -> Option<Distribution> {
-        self.inner()
-            .get(entity_labels, self.name, metric_fields)
-            .await
+        self.inner.get(entity_labels, metric_fields).await
     }
 
     pub async fn get_or_empty(
@@ -101,14 +96,10 @@ impl EventMetric {
         entity_labels: &FieldMap,
         metric_fields: &FieldMap,
     ) -> Distribution {
-        let bucketer = match self.config.bucketer {
-            Some(bucketer) => bucketer,
-            None => Bucketer::default().into(),
-        };
-        self.inner()
-            .get(entity_labels, self.name, metric_fields)
+        self.inner
+            .get(entity_labels, metric_fields)
             .await
-            .or(Some(Distribution::new(bucketer)))
+            .or(Some(Distribution::new(self.bucketer())))
             .unwrap()
     }
 
@@ -119,59 +110,38 @@ impl EventMetric {
         entity_labels: &FieldMap,
         metric_fields: &FieldMap,
     ) {
-        self.inner()
-            .record(entity_labels, self.name, sample, times, metric_fields)
+        self.inner
+            .record(entity_labels, sample, times, metric_fields)
             .await
     }
 
     pub async fn record(&self, sample: f64, entity_labels: &FieldMap, metric_fields: &FieldMap) {
-        self.inner()
-            .record(entity_labels, self.name, sample, 1, metric_fields)
+        self.inner
+            .record(entity_labels, sample, 1, metric_fields)
             .await
     }
 
     pub async fn delete(&self, entity_labels: &FieldMap, metric_fields: &FieldMap) -> bool {
-        self.inner()
-            .delete(entity_labels, self.name, metric_fields)
-            .await
+        self.inner.delete(entity_labels, metric_fields).await
     }
 
     pub async fn delete_entity(&self, entity_labels: &FieldMap) -> bool {
-        self.inner().delete_entity(entity_labels, self.name).await
+        self.inner.delete_entity(entity_labels).await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fields::FieldValue;
-    use std::sync::{LazyLock, atomic::AtomicI64, atomic::Ordering};
-
-    fn test_entity_labels() -> FieldMap {
-        static IOTA: LazyLock<AtomicI64> = LazyLock::new(|| AtomicI64::from(42));
-        FieldMap::from([
-            ("sator", FieldValue::Str("arepo".into())),
-            (
-                "lorem",
-                FieldValue::Int(IOTA.fetch_add(1, Ordering::Relaxed)),
-            ),
-        ])
-    }
-
-    fn test_metric_fields() -> FieldMap {
-        static IOTA: LazyLock<AtomicI64> = LazyLock::new(|| AtomicI64::from(42));
-        FieldMap::from([
-            ("tenet", FieldValue::Bool(true)),
-            (
-                "opera",
-                FieldValue::Int(IOTA.fetch_add(1, Ordering::Relaxed)),
-            ),
-        ])
-    }
+    use crate::tsz::{
+        bucketer::Bucketer, testing::test_entity_labels, testing::test_metric_fields,
+    };
 
     #[tokio::test]
     async fn test_new() {
-        let config = MetricConfig::default().set_cumulative(true);
+        let config = MetricConfig::default()
+            .set_cumulative(true)
+            .set_bucketer(Bucketer::default());
         let metric = EventMetric::new("/foo/bar/distribution", config);
         let entity_labels = test_entity_labels();
         let metric_fields = test_metric_fields();
@@ -181,13 +151,24 @@ mod tests {
             metric.get_or_empty(&entity_labels, &metric_fields).await,
             Distribution::default()
         );
+        assert!(
+            EXPORTER
+                .get_distribution(&entity_labels, "/foo/bar/distribution", &metric_fields)
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]
     async fn test_config_overrides() {
         let config = MetricConfig::default();
         let metric = EventMetric::new("/foo/bar/distribution", config);
-        assert_eq!(*metric.config(), config.set_cumulative(true));
+        assert_eq!(
+            *metric.config(),
+            config
+                .set_cumulative(true)
+                .set_bucketer(Bucketer::default())
+        );
     }
 
     #[tokio::test]
@@ -202,6 +183,7 @@ mod tests {
                 .set_cumulative(true)
                 .set_skip_stable_cells(true)
                 .set_delta_mode(true)
+                .set_bucketer(Bucketer::default())
         );
     }
 
@@ -217,7 +199,16 @@ mod tests {
             metric.get(&entity_labels, &metric_fields).await,
             Some(d.clone())
         );
-        assert_eq!(metric.get_or_empty(&entity_labels, &metric_fields).await, d);
+        assert_eq!(
+            metric.get_or_empty(&entity_labels, &metric_fields).await,
+            d.clone()
+        );
+        assert_eq!(
+            EXPORTER
+                .get_distribution(&entity_labels, "/foo/bar/distribution", &metric_fields)
+                .await,
+            Some(d)
+        );
     }
 
     #[tokio::test]
@@ -234,7 +225,16 @@ mod tests {
             metric.get(&entity_labels, &metric_fields).await,
             Some(d.clone())
         );
-        assert_eq!(metric.get_or_empty(&entity_labels, &metric_fields).await, d);
+        assert_eq!(
+            metric.get_or_empty(&entity_labels, &metric_fields).await,
+            d.clone()
+        );
+        assert_eq!(
+            EXPORTER
+                .get_distribution(&entity_labels, "/foo/bar/distribution", &metric_fields)
+                .await,
+            Some(d)
+        );
     }
 
     #[tokio::test]
@@ -253,7 +253,20 @@ mod tests {
             metric.get(&entity_labels, &metric_fields).await,
             Some(d.clone())
         );
-        assert_eq!(metric.get_or_empty(&entity_labels, &metric_fields).await, d);
+        assert_eq!(
+            metric.get_or_empty(&entity_labels, &metric_fields).await,
+            d.clone()
+        );
+        assert_eq!(
+            EXPORTER
+                .get_distribution(
+                    &entity_labels,
+                    "/foo/bar/distribution/custom",
+                    &metric_fields
+                )
+                .await,
+            Some(d)
+        );
     }
 
     #[tokio::test]
@@ -270,7 +283,16 @@ mod tests {
             metric.get(&entity_labels, &metric_fields).await,
             Some(d.clone())
         );
-        assert_eq!(metric.get_or_empty(&entity_labels, &metric_fields).await, d);
+        assert_eq!(
+            metric.get_or_empty(&entity_labels, &metric_fields).await,
+            d.clone()
+        );
+        assert_eq!(
+            EXPORTER
+                .get_distribution(&entity_labels, "/foo/bar/distribution", &metric_fields)
+                .await,
+            Some(d)
+        );
     }
 
     #[tokio::test]
@@ -283,6 +305,12 @@ mod tests {
         assert_eq!(
             metric.get_or_empty(&entity_labels, &metric_fields).await,
             Distribution::default()
+        );
+        assert!(
+            EXPORTER
+                .get_distribution(&entity_labels, "/foo/bar/distribution", &metric_fields)
+                .await
+                .is_none()
         );
     }
 
@@ -297,6 +325,12 @@ mod tests {
         assert_eq!(
             metric.get_or_empty(&entity_labels, &metric_fields).await,
             Distribution::default()
+        );
+        assert!(
+            EXPORTER
+                .get_distribution(&entity_labels, "/foo/bar/distribution", &metric_fields)
+                .await
+                .is_none()
         );
     }
 
@@ -314,7 +348,16 @@ mod tests {
             metric.get(&entity_labels, &metric_fields).await,
             Some(d.clone())
         );
-        assert_eq!(metric.get_or_empty(&entity_labels, &metric_fields).await, d);
+        assert_eq!(
+            metric.get_or_empty(&entity_labels, &metric_fields).await,
+            d.clone()
+        );
+        assert_eq!(
+            EXPORTER
+                .get_distribution(&entity_labels, "/foo/bar/distribution", &metric_fields)
+                .await,
+            Some(d)
+        );
     }
 
     #[tokio::test]
@@ -333,6 +376,18 @@ mod tests {
         assert_eq!(
             metric.get_or_empty(&entity_labels, &metric_fields2).await,
             Distribution::default()
+        );
+        assert!(
+            EXPORTER
+                .get_distribution(&entity_labels, "/foo/bar/distribution", &metric_fields1)
+                .await
+                .is_none()
+        );
+        assert!(
+            EXPORTER
+                .get_distribution(&entity_labels, "/foo/bar/distribution", &metric_fields2)
+                .await
+                .is_none()
         );
     }
 
@@ -354,6 +409,18 @@ mod tests {
         assert_eq!(
             metric.get_or_empty(&entity_labels, &metric_fields2).await,
             Distribution::default()
+        );
+        assert!(
+            EXPORTER
+                .get_distribution(&entity_labels, "/foo/bar/distribution", &metric_fields1)
+                .await
+                .is_none()
+        );
+        assert!(
+            EXPORTER
+                .get_distribution(&entity_labels, "/foo/bar/distribution", &metric_fields2)
+                .await
+                .is_none()
         );
     }
 
@@ -379,7 +446,19 @@ mod tests {
         );
         assert_eq!(
             metric.get_or_empty(&entity_labels2, &metric_fields).await,
-            d
+            d.clone()
+        );
+        assert!(
+            EXPORTER
+                .get_distribution(&entity_labels1, "/foo/bar/distribution", &metric_fields)
+                .await
+                .is_none()
+        );
+        assert_eq!(
+            EXPORTER
+                .get_distribution(&entity_labels2, "/foo/bar/distribution", &metric_fields)
+                .await,
+            Some(d)
         );
     }
 
@@ -402,11 +481,23 @@ mod tests {
         assert!(metric.get(&entity_labels, &metric_fields2).await.is_none());
         assert_eq!(
             metric.get_or_empty(&entity_labels, &metric_fields1).await,
-            d
+            d.clone()
         );
         assert_eq!(
             metric.get_or_empty(&entity_labels, &metric_fields2).await,
             Distribution::default()
+        );
+        assert_eq!(
+            EXPORTER
+                .get_distribution(&entity_labels, "/foo/bar/distribution", &metric_fields1)
+                .await,
+            Some(d)
+        );
+        assert!(
+            EXPORTER
+                .get_distribution(&entity_labels, "/foo/bar/distribution", &metric_fields2)
+                .await
+                .is_none()
         );
     }
 }

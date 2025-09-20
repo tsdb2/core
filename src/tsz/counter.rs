@@ -1,54 +1,39 @@
-use crate::exporter::{EXPORTER, MetricConfig};
-use crate::fields::FieldMap;
-use std::sync::OnceLock;
+use crate::tsz::{FieldMap, config::MetricConfig, exporter::EXPORTER};
+use crate::utils::lazy::Lazy;
 
 #[derive(Debug)]
-struct CounterImpl {}
+struct CounterImpl {
+    name: &'static str,
+}
 
 impl CounterImpl {
     fn new(name: &'static str, config: MetricConfig) -> Self {
         EXPORTER.define_metric_redundant(name, config);
-        Self {}
+        Self { name }
     }
 
-    async fn get(
-        &self,
-        entity_labels: &FieldMap,
-        metric_name: &str,
-        metric_fields: &FieldMap,
-    ) -> Option<i64> {
+    async fn get(&self, entity_labels: &FieldMap, metric_fields: &FieldMap) -> Option<i64> {
         EXPORTER
-            .get_int(entity_labels, metric_name, metric_fields)
+            .get_int(entity_labels, self.name, metric_fields)
             .await
     }
 
-    async fn increment_by(
-        &self,
-        entity_labels: &FieldMap,
-        metric_name: &str,
-        delta: i64,
-        metric_fields: &FieldMap,
-    ) {
+    async fn increment_by(&self, entity_labels: &FieldMap, delta: i64, metric_fields: &FieldMap) {
         EXPORTER
-            .add_to_int(entity_labels, metric_name, delta, metric_fields)
+            .add_to_int(entity_labels, self.name, delta, metric_fields)
             .await;
     }
 
-    async fn delete(
-        &self,
-        entity_labels: &FieldMap,
-        metric_name: &str,
-        metric_fields: &FieldMap,
-    ) -> bool {
+    async fn delete(&self, entity_labels: &FieldMap, metric_fields: &FieldMap) -> bool {
         EXPORTER
-            .delete_value(entity_labels, metric_name, metric_fields)
+            .delete_value(entity_labels, self.name, metric_fields)
             .await
             .is_some()
     }
 
-    async fn delete_entity(&self, entity_labels: &FieldMap, metric_name: &str) -> bool {
+    async fn delete_entity(&self, entity_labels: &FieldMap) -> bool {
         EXPORTER
-            .delete_metric_from_entity(entity_labels, metric_name)
+            .delete_metric_from_entity(entity_labels, self.name)
             .await
     }
 }
@@ -57,7 +42,7 @@ impl CounterImpl {
 pub struct Counter {
     name: &'static str,
     config: MetricConfig,
-    inner: OnceLock<CounterImpl>,
+    inner: Lazy<CounterImpl>,
 }
 
 impl Counter {
@@ -67,13 +52,8 @@ impl Counter {
         Self {
             name,
             config,
-            inner: OnceLock::default(),
+            inner: Lazy::new(move || CounterImpl::new(name, config)),
         }
-    }
-
-    fn inner(&self) -> &CounterImpl {
-        self.inner
-            .get_or_init(|| CounterImpl::new(self.name, self.config))
     }
 
     pub fn name(&self) -> &'static str {
@@ -85,14 +65,12 @@ impl Counter {
     }
 
     pub async fn get(&self, entity_labels: &FieldMap, metric_fields: &FieldMap) -> Option<i64> {
-        self.inner()
-            .get(entity_labels, self.name, metric_fields)
-            .await
+        self.inner.get(entity_labels, metric_fields).await
     }
 
     pub async fn get_or_zero(&self, entity_labels: &FieldMap, metric_fields: &FieldMap) -> i64 {
-        self.inner()
-            .get(entity_labels, self.name, metric_fields)
+        self.inner
+            .get(entity_labels, metric_fields)
             .await
             .or(Some(0))
             .unwrap()
@@ -104,56 +82,32 @@ impl Counter {
         entity_labels: &FieldMap,
         metric_fields: &FieldMap,
     ) {
-        self.inner()
-            .increment_by(entity_labels, self.name, delta, metric_fields)
+        self.inner
+            .increment_by(entity_labels, delta, metric_fields)
             .await;
     }
 
     pub async fn increment(&self, entity_labels: &FieldMap, metric_fields: &FieldMap) {
-        self.inner()
-            .increment_by(entity_labels, self.name, 1, metric_fields)
+        self.inner
+            .increment_by(entity_labels, 1, metric_fields)
             .await;
     }
 
     pub async fn delete(&self, entity_labels: &FieldMap, metric_fields: &FieldMap) -> bool {
-        self.inner()
-            .delete(entity_labels, self.name, metric_fields)
-            .await
+        self.inner.delete(entity_labels, metric_fields).await
     }
 
     pub async fn delete_entity(&self, entity_labels: &FieldMap) -> bool {
-        self.inner().delete_entity(entity_labels, self.name).await
+        self.inner.delete_entity(entity_labels).await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bucketer::Bucketer;
-    use crate::fields::FieldValue;
-    use std::sync::{LazyLock, atomic::AtomicI64, atomic::Ordering};
-
-    fn test_entity_labels() -> FieldMap {
-        static IOTA: LazyLock<AtomicI64> = LazyLock::new(|| AtomicI64::from(42));
-        FieldMap::from([
-            ("sator", FieldValue::Str("arepo".into())),
-            (
-                "lorem",
-                FieldValue::Int(IOTA.fetch_add(1, Ordering::Relaxed)),
-            ),
-        ])
-    }
-
-    fn test_metric_fields() -> FieldMap {
-        static IOTA: LazyLock<AtomicI64> = LazyLock::new(|| AtomicI64::from(42));
-        FieldMap::from([
-            ("tenet", FieldValue::Bool(true)),
-            (
-                "opera",
-                FieldValue::Int(IOTA.fetch_add(1, Ordering::Relaxed)),
-            ),
-        ])
-    }
+    use crate::tsz::{
+        bucketer::Bucketer, testing::test_entity_labels, testing::test_metric_fields,
+    };
 
     #[tokio::test]
     async fn test_new() {
@@ -164,6 +118,12 @@ mod tests {
         assert_eq!(counter.name(), "/foo/bar/counter");
         assert_eq!(*counter.config(), config);
         assert_eq!(counter.get_or_zero(&entity_labels, &metric_fields).await, 0);
+        assert!(
+            EXPORTER
+                .get_int(&entity_labels, "/foo/bar/counter", &metric_fields)
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -201,6 +161,12 @@ mod tests {
             .await;
         assert_eq!(counter.get(&entity_labels, &metric_fields).await, Some(0));
         assert_eq!(counter.get_or_zero(&entity_labels, &metric_fields).await, 0);
+        assert_eq!(
+            EXPORTER
+                .get_int(&entity_labels, "/foo/bar/counter", &metric_fields)
+                .await,
+            Some(0)
+        );
     }
 
     #[tokio::test]
@@ -213,6 +179,12 @@ mod tests {
             .await;
         assert_eq!(counter.get(&entity_labels, &metric_fields).await, Some(1));
         assert_eq!(counter.get_or_zero(&entity_labels, &metric_fields).await, 1);
+        assert_eq!(
+            EXPORTER
+                .get_int(&entity_labels, "/foo/bar/counter", &metric_fields)
+                .await,
+            Some(1)
+        );
     }
 
     #[tokio::test]
@@ -225,6 +197,12 @@ mod tests {
             .await;
         assert_eq!(counter.get(&entity_labels, &metric_fields).await, Some(2));
         assert_eq!(counter.get_or_zero(&entity_labels, &metric_fields).await, 2);
+        assert_eq!(
+            EXPORTER
+                .get_int(&entity_labels, "/foo/bar/counter", &metric_fields)
+                .await,
+            Some(2)
+        );
     }
 
     #[tokio::test]
@@ -240,6 +218,12 @@ mod tests {
             .await;
         assert_eq!(counter.get(&entity_labels, &metric_fields).await, Some(5));
         assert_eq!(counter.get_or_zero(&entity_labels, &metric_fields).await, 5);
+        assert_eq!(
+            EXPORTER
+                .get_int(&entity_labels, "/foo/bar/counter", &metric_fields)
+                .await,
+            Some(5)
+        );
     }
 
     #[tokio::test]
@@ -250,6 +234,12 @@ mod tests {
         counter.increment(&entity_labels, &metric_fields).await;
         assert_eq!(counter.get(&entity_labels, &metric_fields).await, Some(1));
         assert_eq!(counter.get_or_zero(&entity_labels, &metric_fields).await, 1);
+        assert_eq!(
+            EXPORTER
+                .get_int(&entity_labels, "/foo/bar/counter", &metric_fields)
+                .await,
+            Some(1)
+        );
     }
 
     #[tokio::test]
@@ -261,6 +251,12 @@ mod tests {
         counter.increment(&entity_labels, &metric_fields).await;
         assert_eq!(counter.get(&entity_labels, &metric_fields).await, Some(2));
         assert_eq!(counter.get_or_zero(&entity_labels, &metric_fields).await, 2);
+        assert_eq!(
+            EXPORTER
+                .get_int(&entity_labels, "/foo/bar/counter", &metric_fields)
+                .await,
+            Some(2)
+        );
     }
 
     #[tokio::test]
@@ -271,6 +267,12 @@ mod tests {
         counter.delete(&entity_labels, &metric_fields).await;
         assert!(counter.get(&entity_labels, &metric_fields).await.is_none());
         assert_eq!(counter.get_or_zero(&entity_labels, &metric_fields).await, 0);
+        assert!(
+            EXPORTER
+                .get_int(&entity_labels, "/foo/bar/counter", &metric_fields)
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -284,6 +286,12 @@ mod tests {
         counter.delete(&entity_labels, &metric_fields).await;
         assert!(counter.get(&entity_labels, &metric_fields).await.is_none());
         assert_eq!(counter.get_or_zero(&entity_labels, &metric_fields).await, 0);
+        assert!(
+            EXPORTER
+                .get_int(&entity_labels, "/foo/bar/counter", &metric_fields)
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -300,6 +308,12 @@ mod tests {
             .await;
         assert_eq!(counter.get(&entity_labels, &metric_fields).await, Some(3));
         assert_eq!(counter.get_or_zero(&entity_labels, &metric_fields).await, 3);
+        assert_eq!(
+            EXPORTER
+                .get_int(&entity_labels, "/foo/bar/counter", &metric_fields)
+                .await,
+            Some(3)
+        );
     }
 
     #[tokio::test]
@@ -318,6 +332,18 @@ mod tests {
         assert_eq!(
             counter.get_or_zero(&entity_labels, &metric_fields2).await,
             0
+        );
+        assert!(
+            EXPORTER
+                .get_int(&entity_labels, "/foo/bar/counter", &metric_fields1)
+                .await
+                .is_none()
+        );
+        assert!(
+            EXPORTER
+                .get_int(&entity_labels, "/foo/bar/counter", &metric_fields2)
+                .await
+                .is_none()
         );
     }
 
@@ -339,6 +365,18 @@ mod tests {
         assert_eq!(
             counter.get_or_zero(&entity_labels, &metric_fields2).await,
             0
+        );
+        assert!(
+            EXPORTER
+                .get_int(&entity_labels, "/foo/bar/counter", &metric_fields1)
+                .await
+                .is_none()
+        );
+        assert!(
+            EXPORTER
+                .get_int(&entity_labels, "/foo/bar/counter", &metric_fields2)
+                .await
+                .is_none()
         );
     }
 
@@ -364,6 +402,18 @@ mod tests {
         assert_eq!(
             counter.get_or_zero(&entity_labels2, &metric_fields).await,
             2
+        );
+        assert!(
+            EXPORTER
+                .get_int(&entity_labels1, "/foo/bar/counter", &metric_fields)
+                .await
+                .is_none()
+        );
+        assert_eq!(
+            EXPORTER
+                .get_int(&entity_labels2, "/foo/bar/counter", &metric_fields)
+                .await,
+            Some(2)
         );
     }
 
@@ -392,6 +442,18 @@ mod tests {
         assert_eq!(
             counter.get_or_zero(&entity_labels, &metric_fields2).await,
             0
+        );
+        assert_eq!(
+            EXPORTER
+                .get_int(&entity_labels, "/foo/bar/counter", &metric_fields1)
+                .await,
+            Some(3)
+        );
+        assert!(
+            EXPORTER
+                .get_int(&entity_labels, "/foo/bar/counter", &metric_fields2)
+                .await
+                .is_none()
         );
     }
 }

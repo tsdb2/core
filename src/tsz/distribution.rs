@@ -1,4 +1,4 @@
-use crate::bucketer::{Bucketer, BucketerRef};
+use crate::tsz::{bucketer::Bucketer, bucketer::BucketerRef};
 use anyhow::{Result, anyhow};
 
 /// Manages a histogram of sample frequencies. The histogram is conceptually an array of buckets,
@@ -105,11 +105,20 @@ impl Distribution {
 
     /// Records a sample `times` times.
     pub fn record_many(&mut self, sample: f64, times: usize) {
-        let i = self.bucketer.get_bucket_for(sample);
-        if i < 0 {
+        let bucket = self.bucketer.get_bucket_for(sample);
+        self.record_to_bucket(sample, bucket, times);
+    }
+
+    /// Records a sample `times` times, forcing it to the specified bucket.
+    ///
+    /// WARNING: the `bucket` parameter MUST be the index returned by
+    /// `bucketer.get_bucket_for(sample)`, otherwise the distribution will start giving incorrect
+    /// stats.
+    pub fn record_to_bucket(&mut self, sample: f64, bucket: isize, times: usize) {
+        if bucket < 0 {
             self.underflow += times;
         } else {
-            let i = i as usize;
+            let i = bucket as usize;
             if i >= self.num_finite_buckets() {
                 self.overflow += times;
             } else {
