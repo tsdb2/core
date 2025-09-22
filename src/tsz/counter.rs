@@ -117,6 +117,7 @@ mod tests {
         let metric_fields = test_metric_fields();
         assert_eq!(counter.name(), "/foo/bar/counter");
         assert_eq!(*counter.config(), config);
+        assert!(counter.get(&entity_labels, &metric_fields).await.is_none());
         assert_eq!(counter.get_or_zero(&entity_labels, &metric_fields).await, 0);
         assert!(
             EXPORTER

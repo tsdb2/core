@@ -8,6 +8,7 @@ pub mod config;
 pub mod counter;
 pub mod distribution;
 pub mod event_metric;
+pub mod gauge;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum FieldValue {

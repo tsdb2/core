@@ -7,8 +7,7 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::ops::Deref;
 use std::pin::Pin;
-use std::sync::Mutex as SyncMutex;
-use std::sync::{Arc, LazyLock, atomic::AtomicUsize, atomic::Ordering};
+use std::sync::{Arc, LazyLock, Mutex as SyncMutex, atomic::AtomicUsize, atomic::Ordering};
 use std::time::SystemTime;
 use tokio::sync::Mutex;
 
